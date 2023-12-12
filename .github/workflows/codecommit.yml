@@ -1,4 +1,4 @@
-name: Set Repo
+name: Push To CodeCommit Repo
 on:
   pull_request:
     branches:
