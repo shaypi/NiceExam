@@ -1,0 +1,101 @@
+name: Deploy Secondary Stack to AWS
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+env:
+  AWS_REGION: eu-west-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      
+      - name: define Runner ID
+        run: |
+          echo "runner id: $GITHUB_RUN_ID"
+          echo "::set-output name=github_runner_id::$GITHUB_RUN_ID"
+        id: id
+
+      - name: Install third-party dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get remove containerd.io
+          sudo apt-get install -y zip curl vim docker.io
+      
+      - name: Login to AWS
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin 160213321344.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          App: nice
+          ECR_REGISTRY: 160213321344.dkr.ecr.eu-west-1.amazonaws.com
+          ECR_REPOSITORY: nice
+          SHA:  ${{ github.sha }}
+        run: |
+          docker build -t $App app/ 
+          docker tag $App $ECR_REGISTRY/$ECR_REPOSITORY:$SHA
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$SHA
+          docker tag $App $ECR_REGISTRY/$ECR_REPOSITORY:$App-${{ github.run_id }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$App-${{ github.run_id }}
+
+      - name: Download Stack Outputs File
+        uses: dawidd6/action-download-artifact@v2.28.0
+        with:
+          workflow_conclusion: success
+          workflow: primary.yml
+          check_artifacts: true
+          search_artifacts: true
+          name: stack-outputs
+          path: ${{ github.workspace }}
+          github_token: ${{secrets.PAT}}
+
+      - name: Extract Stack Outputs
+        id: extract-outputs
+        run: |
+          ECSTaskRoleArn=$(jq -r '.[] | select(.OutputKey == "ECSTaskRoleArn") | .OutputValue' stack-outputs.json)
+          VPCId=$(jq -r '.[] | select(.OutputKey == "VPCId") | .OutputValue' stack-outputs.json)
+          SecurityGroupId=$(jq -r '.[] | select(.OutputKey == "SecurityGroupId") | .OutputValue' stack-outputs.json)
+          ECRRepositoryUri=$(jq -r '.[] | select(.OutputKey == "ECRRepositoryUri") | .OutputValue' stack-outputs.json)
+          ECSCluster=$(jq -r '.[] | select(.OutputKey == "ECSCluster") | .OutputValue' stack-outputs.json)
+          NiceSubnet1=$(jq -r '.[] | select(.OutputKey == "NiceSubnet1") | .OutputValue' stack-outputs.json)
+          NiceSubnet2=$(jq -r '.[] | select(.OutputKey == "NiceSubnet2") | .OutputValue' stack-outputs.json)
+
+
+          echo "::set-output name=VPCId::$VPCId"
+          echo "::set-output name=NiceSubnet1::$NiceSubnet1"
+          echo "::set-output name=NiceSubnet2::$NiceSubnet2"
+          echo "::set-output name=SecurityGroupId::$SecurityGroupId"
+          echo "::set-output name=ECSCluster::$ECSCluster"
+          echo "::set-output name=ECRRepositoryUri::$ECRRepositoryUri"
+          echo "::set-output name=ECSTaskRoleArn::$ECSTaskRoleArn"
+
+          echo "ECSTaskRoleArn:   $ECSTaskRoleArn"
+          echo "VPCId:            $VPCId"
+          echo "SecurityGroupId:  $SecurityGroupId"
+          echo "ECRRepositoryUri: $ECRRepositoryUri"
+          echo "ECSCluster:       $ECSCluster"
+          echo "NiceSubnet1:      $NiceSubnet1"
+          echo "NiceSubnet2:      $NiceSubnet2"
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy Primary Stack to AWS CloudFormation
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: secondary-stack
+          template: cloudformation/template2.yaml
+          capabilities: CAPABILITY_NAMED_IAM
+          parameter-overrides: "NiceSubnet1=${{ steps.extract-outputs.outputs.NiceSubnet1 }},NiceSubnet2=${{ steps.extract-outputs.outputs.NiceSubnet2 }},SecurityGroupId=${{ steps.extract-outputs.outputs.SecurityGroupId }},ECSCluster=${{ steps.extract-outputs.outputs.ECSCluster }},ECRRepositoryUri=${{ steps.extract-outputs.outputs.ECRRepositoryUri }},AppVersion=${{ github.run_id }},ECSTaskRoleArn=${{ steps.extract-outputs.outputs.ECSTaskRoleArn }}"

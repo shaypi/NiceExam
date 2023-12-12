@@ -1,0 +1,60 @@
+name: Set Repo
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Configure AWS credentials
+        run: |
+          mkdir ~/.aws
+          echo "[default]" > ~/.aws/credentials
+          echo "aws_access_key_id=${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+          echo "aws_secret_access_key=${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+          echo "[default]" > ~/.aws/config
+          echo "region=${AWS_REGION}" >> ~/.aws/config
+
+      - name: Configure Git with AWS credentials
+        run: |
+          git config --global credential.helper '!aws codecommit credential-helper $@'
+          git config --global credential.UseHttpPath true
+
+      - name: Set Git User Info
+        run: |
+          git config --global user.name "Shay Pinchasi"
+          git config --global user.email "shaypi1986@gmail.com"
+
+      - name: clone the repo
+        run: git clone https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/nice-Repo
+    
+      - name: Adding data
+        run: |
+            cd nice-Repo
+            cp -r ../app ../cloudformation ../buildspec.yml .
+            git add .
+            git commit -am "Add or update data"
+            git push
+    
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3

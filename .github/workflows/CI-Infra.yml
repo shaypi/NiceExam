@@ -1,0 +1,63 @@
+name: CI-Infra
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:    
+  cicd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      
+      - name: Install third-party dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y zip curl vim
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Download Stack Outputs File
+        uses: dawidd6/action-download-artifact@v2.28.0
+        with:
+          workflow_conclusion: success
+          workflow: primary.yml
+          check_artifacts: true
+          search_artifacts: true
+          name: deploy-stack-outputs
+          path: ${{ github.workspace }}
+          github_token: ${{secrets.PAT}}
+      
+      - name: Extract Stack Outputs
+        id: extract-outputs
+        run: |
+          ECSServiceName=$(jq -r '.[] | select(.OutputKey == "ECSServiceName") | .OutputValue' deploy-stack-outputs.json)
+
+          echo "::set-output name=ECSServiceName::$ECSServiceName"
+
+          echo "ECSServiceName:   $ECSServiceName"
+
+      - name: Deploy Primary Stack to AWS CloudFormation
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: CI-Infra
+          template: cloudformation/cicd.yaml
+          capabilities: CAPABILITY_NAMED_IAM
+          parameter-overrides: "ECSServiceName=${{ steps.extract-outputs.outputs.ECSServiceName }},ECSCluster=nice"
+      
+      # - name: Setup tmate session
+      #   if: ${{ failure() }}
+      #   uses: mxschmitt/action-tmate@v3

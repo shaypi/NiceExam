@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  ECSCluster:
+    Type: String
+    Default: nice
+    Description: The name of the ECS cluster.
+  
+  ECSServiceName:
+    Type: String
+    Description: The name of the ECS service.
+  
+
+Resources:
+  # CodeCommit Repository
+  MyAppRepo:
+    Type: 'AWS::CodeCommit::Repository'
+    Properties:
+      RepositoryName: !Sub '${ECSCluster}-Repo'
+
+  # S3 Bucket to store artifacts
+  CodePipelineArtifactsBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${ECSCluster}-codepipeline-artifacts'
+      AccessControl: Private
+
+  # IAM Role for CodeBuild to assume the specified role
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'CodeBuild-${ECSCluster}-Service-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codebuild.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:StopBuild'
+                  - 'codebuild:RetryBuild'
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource: '*'
+              - Effect: 'Allow'
+                Action:
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:PutImage'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:GetAuthorizationToken'
+                Resource: '*'
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetBucketAcl'
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                  - 's3:PutObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ECSCluster}-codepipeline-artifacts/*'
+                  - !Sub 'arn:aws:s3:::${ECSCluster}-codepipeline-artifacts'
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+              - Effect: 'Allow'
+                Action:
+                  - 'codecommit:GitPull'
+                Resource: !GetAtt MyAppRepo.Arn
+  
+  # IAM Role for CodePipeline to assume the specified role
+  CodePipelineServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'CodePipeline-${ECSCluster}-Service-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codepipeline.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 
+                  - 's3:ListBucket'
+                  - 's3:GetBucketVersioning'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:PutObject'
+                  - 'codecommit:GitPull'
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:UploadArchive'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'codecommit:CancelUploadArchive'
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:BatchGetBuilds'
+                Resource: '*'
+
+  # IAM Role for CodeDeploy to assume the specified role
+  CodeDeployServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'CodeDeploy-${ECSCluster}-Service-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codedeploy.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodeDeployPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ec2:Describe*'
+                  - 'ec2:List*'
+                  - 'autoscaling:Describe*'
+                  - 'autoscaling:List*'
+                  - 's3:ListBucket'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                  - 's3:PutObject'
+                Resource: '*'
+  
+  # CodeDeploy Application
+  MyAppCodeDeployApp:
+    Type: 'AWS::CodeDeploy::Application'
+    Properties:
+      ApplicationName: !Sub '${ECSCluster}-CodeDeploy-App'
+
+  # CodeDeploy Deployment Group
+  MyAppCodeDeployDeploymentGroup:
+    Type: 'AWS::CodeDeploy::DeploymentGroup'
+    Properties:
+      ApplicationName: !Ref MyAppCodeDeployApp
+      DeploymentGroupName: !Sub '${ECSCluster}-CodeDeploy-DeploymentGroup'
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      DeploymentConfigName: CodeDeployDefault.OneAtATime
+      AutoScalingGroups: []
+
+  
+  # CodePipeline
+  MyAppPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      Name: !Sub '${ECSCluster}-Pipeline'
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactsBucket
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: !Sub '${ECSCluster}-Repo'
+                BranchName: master
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref MyAppCodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: ECS
+              Configuration:
+                ClusterName: !Ref ECSCluster
+                ServiceName: !Ref ECSServiceName
+                FileName: imagedefinitions.json
+              InputArtifacts:
+                - Name: BuildOutput
+
+  # CodeBuild Project
+  MyAppCodeBuild:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn: CodeBuildServiceRole
+    Properties:
+      Name: !Sub '${ECSCluster}-CodeBuild'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref CodePipelineArtifactsBucket
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/amazonlinux2-x86_64-standard:4.0'
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+      Source:
+        Type: CODECOMMIT
+        Location: !Sub 'https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${ECSCluster}-Repo'
+      SourceVersion: main
+      TimeoutInMinutes: 10
