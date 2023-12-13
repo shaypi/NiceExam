@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  NiceSubnet1:
+    Type: String
+    Description: The ID of Subnet 1 for the Application Load Balancer.
+
+  NiceSubnet2:
+    Type: String
+    Description: The ID of Subnet 2 for the Application Load Balancer.
+
+  SecurityGroupId:
+    Type: String
+    Description: The ID of the Security Group for ECS Tasks.
+
+  ECSCluster:
+    Type: String
+    Description: The name of the ECS cluster.
+
+  ECRRepositoryUri:
+    Type: String
+    Description: The URI of the ECR repository.
+
+  AppVersion:
+    Type: String
+    Description: The github runnerID or githubSha.
+
+  ECSTaskRoleArn:
+    Type: String
+    Description: The ARN of the ECS Task Role
+
+Resources:
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ECSCluster
+      Cpu: "256"
+      Memory: "512"
+      TaskRoleArn: !Ref ECSTaskRoleArn
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskRoleArn
+      ContainerDefinitions:
+        - Name: !Ref ECSCluster
+          Image: !Sub '${ECRRepositoryUri}:nice-${AppVersion}'
+          PortMappings:
+            - ContainerPort: 5000
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ECSTaskDefinition
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: !Sub '${ECSCluster}-service'
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 1
+      LaunchType: "FARGATE"
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref NiceSubnet1
+            - !Ref NiceSubnet2
+          SecurityGroups:
+            - !Ref SecurityGroupId
+          AssignPublicIp: ENABLED
+
+Outputs:
+  ECSServiceName:
+    Description: The name of the ECS Service
+    Value: !Ref ECSService
+
+  ECSTaskDefinitionARN:
+    Description: The ARN of the ECS Task Definition
+    Value: !Ref ECSTaskDefinition
