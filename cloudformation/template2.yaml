@@ -46,7 +46,7 @@ Resources:
         - Name: !Ref ECSCluster
           Image: !Sub '${ECRRepositoryUri}:nice-${AppVersion}'
           PortMappings:
-            - ContainerPort: 5000
+            - ContainerPort: 80
 
   # ECS Service
   ECSService:
